@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>インベーダーゲーム（SFX+Alien / iPad音確実版）</title>
+  <title>インベーダーゲーム（SFX+Alien / iPad Space修正版）</title>
   <style>
     :root { color-scheme: dark; }
     body{
@@ -25,7 +25,7 @@
       color:#d7e1ff;
       margin:8px 2px 10px;
     }
-    .left{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .left{ display:flex; gap:12px; flex-wrap:wrap; }
     .pill{
       background:rgba(255,255,255,.06);
       border:1px solid rgba(255,255,255,.10);
@@ -41,10 +41,9 @@
       color:#eaf6ff;
       padding:8px 12px;
       border-radius:10px;
-      font-weight:900;
+      font-weight:800;
     }
     .btn:active{ transform:translateY(1px); }
-
     canvas{
       width:100%;
       height:auto;
@@ -79,13 +78,10 @@
         <div class="pill">LIVES: <span id="lives">3</span></div>
         <div class="pill">WAVE: <span id="wave">1</span></div>
         <div class="pill">SFX: <span id="sfx">ON</span></div>
-        <!-- ★ 追加：音アンロック用ボタン -->
-        <button class="btn" id="btnSound" type="button">SOUND ON</button>
       </div>
       <button class="btn" id="btnRestart" type="button">RESTART</button>
     </div>
 
-    <!-- ★ iPad Safari対策：tabindexでフォーカス可能にする -->
     <canvas id="game" width="760" height="520" tabindex="0"></canvas>
 
     <div class="hint">
@@ -94,7 +90,7 @@
       <span class="kbd">P</span>で一時停止　
       <span class="kbd">M</span>で効果音ON/OFF
       ｜ スマホ：指で左右に動かす（タップで発射）<br>
-      ※ iPad Safari：音が出ない時は「SOUND ON」を1回押す（確実にアンロックする）
+      ※ iPad + キーボード：最初に一回だけ画面をタップするとSpaceが安定するよ
     </div>
   </div>
 
@@ -108,17 +104,15 @@
   const $wave  = document.getElementById("wave");
   const $sfx   = document.getElementById("sfx");
   const btnRestart = document.getElementById("btnRestart");
-  const btnSound = document.getElementById("btnSound");
 
   const W = canvas.width, H = canvas.height;
 
   // =========================
-  // SFX (Web Audio) 強化版
+  // SFX (Web Audio)
   // =========================
   const Audio = {
     ctx: null,
     enabled: true,
-    unlocked: false,
     ensure(){
       if (!this.ctx) {
         const AC = window.AudioContext || window.webkitAudioContext;
@@ -128,41 +122,32 @@
       return this.ctx;
     },
     async unlock(){
-      if (!this.enabled) return;
       const ac = this.ensure();
       if (!ac) return;
-
-      // iOS: gesture内でresumeが通ると強い
-      try{
-        if (ac.state !== "running") await ac.resume();
-      }catch{}
-
-      // 無音ワンショットで“確実に”アンロック
+      if (ac.state === "suspended") {
+        try { await ac.resume(); } catch {}
+      }
+      // iOS対策：無音を一瞬鳴らしてアンロック
       try{
         const o = ac.createOscillator();
         const g = ac.createGain();
-        g.gain.value = 0.00001; // ほぼ無音
+        g.gain.value = 0.0001;
         o.frequency.value = 440;
         o.connect(g); g.connect(ac.destination);
         o.start();
         o.stop(ac.currentTime + 0.01);
-        this.unlocked = true;
       }catch{}
     },
     setEnabled(v){
       this.enabled = v;
       $sfx.textContent = v ? "ON" : "OFF";
     },
-    async beep({freq=600, dur=0.06, type="square", gain=0.06, sweep=0} = {}){
+    beep({freq=600, dur=0.06, type="square", gain=0.06, sweep=0} = {}){
       if (!this.enabled) return;
       const ac = this.ensure();
       if (!ac) return;
 
-      // stateがrunningじゃないと鳴らないので、可能なら起こす
-      if (ac.state !== "running") {
-        try { await ac.resume(); } catch {}
-        if (ac.state !== "running") return;
-      }
+      if (ac.state === "suspended") { ac.resume().catch(()=>{}); }
 
       const o = ac.createOscillator();
       const g = ac.createGain();
@@ -181,21 +166,12 @@
       o.start(t0);
       o.stop(t0 + dur);
     },
-    shoot(){ this.beep({freq: 860, dur: 0.05, type:"square",   gain:0.05, sweep:-120}); },
-    hit(){   this.beep({freq: 220, dur: 0.09, type:"sawtooth",  gain:0.06, sweep: 180}); },
-    hurt(){  this.beep({freq: 120, dur: 0.14, type:"triangle",  gain:0.07, sweep:-40}); },
-    step(){  this.beep({freq: 140, dur: 0.06, type:"square",    gain:0.02, sweep:  20}); }
+    shoot(){ this.beep({freq: 860, dur: 0.05, type:"square", gain:0.05, sweep:-120}); },
+    hit(){   this.beep({freq: 220, dur: 0.09, type:"sawtooth", gain:0.06, sweep: 180}); },
+    hurt(){  this.beep({freq: 120, dur: 0.14, type:"triangle", gain:0.07, sweep:-40}); },
+    step(){  this.beep({freq: 140, dur: 0.06, type:"square", gain:0.02, sweep: 20}); }
   };
   Audio.setEnabled(true);
-
-  // ★ SOUNDボタン：確実にアンロックして試し音を鳴らす
-  btnSound.addEventListener("click", async () => {
-    await Audio.unlock();
-    await Audio.beep({freq: 520, dur: 0.08, type:"triangle", gain:0.06, sweep: 240});
-    btnSound.textContent = "SOUND OK";
-    setTimeout(()=>btnSound.textContent="SOUND ON", 1200);
-    canvas.focus();
-  });
 
   // =========================
   // State
@@ -230,9 +206,7 @@
 
   const keys = new Set();
 
-  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
-
-  window.addEventListener("keydown", async (e) => {
+  window.addEventListener("keydown", (e) => {
     const isSpace = (e.code === "Space") || (e.key === " ") || (e.key === "Spacebar");
 
     if (["ArrowLeft","ArrowRight","a","d","A","D","p","P","m","M"].includes(e.key) || isSpace) {
@@ -244,8 +218,7 @@
     if (e.key === "p" || e.key === "P") paused = !paused;
     if (e.key === "m" || e.key === "M") Audio.setEnabled(!Audio.enabled);
 
-    // ★ iPad Safari：キーボード操作でも一応unlock試す（通らない時もある）
-    await Audio.unlock();
+    Audio.unlock();
     canvas.focus();
 
     if (isSpace && !paused) shoot();
@@ -258,17 +231,10 @@
     return (clientX - rect.left) * (canvas.width / rect.width);
   }
 
-  // ★ iOSは「touchstart」が最強のgestureなので必ずここでunlock
-  canvas.addEventListener("touchstart", async () => {
-    canvas.focus();
-    await Audio.unlock();
-  }, { passive:true });
-
-  canvas.addEventListener("pointerdown", async (e) => {
+  canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
     canvas.focus();
-
-    await Audio.unlock();
+    Audio.unlock();
 
     player.targetX = pointerToCanvasX(e.clientX) - player.w/2;
     if (!paused) shoot();
@@ -281,17 +247,13 @@
 
   canvas.addEventListener("pointerup", () => player.targetX = null);
 
-  btnRestart.addEventListener("click", async () => {
+  btnRestart.addEventListener("click", () => {
     reset(true);
     canvas.focus();
-    await Audio.unlock();
+    Audio.unlock();
   });
 
-  function syncHUD(){
-    $score.textContent = String(score);
-    $lives.textContent = String(lives);
-    $wave.textContent  = String(wave);
-  }
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 
   function reset(full){
     if (full){
@@ -317,6 +279,12 @@
     stepTimer = 0;
 
     syncHUD();
+  }
+
+  function syncHUD(){
+    $score.textContent = String(score);
+    $lives.textContent = String(lives);
+    $wave.textContent  = String(wave);
   }
 
   function makeInvaders(){
@@ -371,7 +339,6 @@
 
     bullets.push({ x: player.x + player.w/2, y: player.y - 6, r: 3.5, vy: -8.5 });
     player.cooldown = 10;
-
     Audio.shoot();
   }
 
@@ -544,13 +511,10 @@
         if (circleRect(b.x, b.y, b.r, inv.x, inv.y, inv.w, inv.h)){
           inv.alive = false;
           bullets.splice(i,1);
-
           score += [60,45,35,25,15][inv.type] ?? 15;
           syncHUD();
-
           explode(inv.x + inv.w/2, inv.y + inv.h/2, invaderColor(inv.type));
           Audio.hit();
-
           invSpeed = Math.min(2.2, invSpeed + 0.015);
           stepInterval = Math.max(0.16, stepInterval - 0.004);
           break;
