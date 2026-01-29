@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>インベーダーゲーム（SFX+Alien / iPad Space修正版）</title>
+  <title>インベーダーゲーム（SFX+Alien / iPad音確実版）</title>
   <style>
     :root { color-scheme: dark; }
     body{
@@ -25,7 +25,7 @@
       color:#d7e1ff;
       margin:8px 2px 10px;
     }
-    .left{ display:flex; gap:12px; flex-wrap:wrap; }
+    .left{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .pill{
       background:rgba(255,255,255,.06);
       border:1px solid rgba(255,255,255,.10);
@@ -41,9 +41,10 @@
       color:#eaf6ff;
       padding:8px 12px;
       border-radius:10px;
-      font-weight:800;
+      font-weight:900;
     }
     .btn:active{ transform:translateY(1px); }
+
     canvas{
       width:100%;
       height:auto;
@@ -54,7 +55,7 @@
         linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
       border:1px solid rgba(255,255,255,.10);
       touch-action:none;
-      outline:none; /* フォーカス枠を消す */
+      outline:none;
     }
     .hint{
       color:rgba(215,225,255,.8);
@@ -78,6 +79,8 @@
         <div class="pill">LIVES: <span id="lives">3</span></div>
         <div class="pill">WAVE: <span id="wave">1</span></div>
         <div class="pill">SFX: <span id="sfx">ON</span></div>
+        <!-- ★ 追加：音アンロック用ボタン -->
+        <button class="btn" id="btnSound" type="button">SOUND ON</button>
       </div>
       <button class="btn" id="btnRestart" type="button">RESTART</button>
     </div>
@@ -91,7 +94,7 @@
       <span class="kbd">P</span>で一時停止　
       <span class="kbd">M</span>で効果音ON/OFF
       ｜ スマホ：指で左右に動かす（タップで発射）<br>
-      ※ iPad + キーボード：最初に一回だけ画面をタップするとSpaceが安定するよ
+      ※ iPad Safari：音が出ない時は「SOUND ON」を1回押す（確実にアンロックする）
     </div>
   </div>
 
@@ -105,11 +108,12 @@
   const $wave  = document.getElementById("wave");
   const $sfx   = document.getElementById("sfx");
   const btnRestart = document.getElementById("btnRestart");
+  const btnSound = document.getElementById("btnSound");
 
   const W = canvas.width, H = canvas.height;
 
   // =========================
-  // SFX (Web Audio)
+  // SFX (Web Audio) 強化版
   // =========================
   const Audio = {
     ctx: null,
@@ -124,15 +128,20 @@
       return this.ctx;
     },
     async unlock(){
+      if (!this.enabled) return;
       const ac = this.ensure();
       if (!ac) return;
-      if (ac.state === "suspended") {
-        try { await ac.resume(); } catch {}
-      }
+
+      // iOS: gesture内でresumeが通ると強い
+      try{
+        if (ac.state !== "running") await ac.resume();
+      }catch{}
+
+      // 無音ワンショットで“確実に”アンロック
       try{
         const o = ac.createOscillator();
         const g = ac.createGain();
-        g.gain.value = 0.0001;
+        g.gain.value = 0.00001; // ほぼ無音
         o.frequency.value = 440;
         o.connect(g); g.connect(ac.destination);
         o.start();
@@ -144,11 +153,16 @@
       this.enabled = v;
       $sfx.textContent = v ? "ON" : "OFF";
     },
-    beep({freq=600, dur=0.06, type="square", gain=0.06, sweep=0} = {}){
+    async beep({freq=600, dur=0.06, type="square", gain=0.06, sweep=0} = {}){
       if (!this.enabled) return;
       const ac = this.ensure();
       if (!ac) return;
-      if (ac.state === "suspended") { ac.resume().catch(()=>{}); }
+
+      // stateがrunningじゃないと鳴らないので、可能なら起こす
+      if (ac.state !== "running") {
+        try { await ac.resume(); } catch {}
+        if (ac.state !== "running") return;
+      }
 
       const o = ac.createOscillator();
       const g = ac.createGain();
@@ -167,12 +181,21 @@
       o.start(t0);
       o.stop(t0 + dur);
     },
-    shoot(){ this.beep({freq: 860, dur: 0.05, type:"square", gain:0.05, sweep:-120}); },
-    hit(){   this.beep({freq: 220, dur: 0.09, type:"sawtooth", gain:0.06, sweep: 180}); },
-    hurt(){  this.beep({freq: 120, dur: 0.14, type:"triangle", gain:0.07, sweep:-40}); },
-    step(){  this.beep({freq: 140, dur: 0.06, type:"square", gain:0.02, sweep: 20}); }
+    shoot(){ this.beep({freq: 860, dur: 0.05, type:"square",   gain:0.05, sweep:-120}); },
+    hit(){   this.beep({freq: 220, dur: 0.09, type:"sawtooth",  gain:0.06, sweep: 180}); },
+    hurt(){  this.beep({freq: 120, dur: 0.14, type:"triangle",  gain:0.07, sweep:-40}); },
+    step(){  this.beep({freq: 140, dur: 0.06, type:"square",    gain:0.02, sweep:  20}); }
   };
   Audio.setEnabled(true);
+
+  // ★ SOUNDボタン：確実にアンロックして試し音を鳴らす
+  btnSound.addEventListener("click", async () => {
+    await Audio.unlock();
+    await Audio.beep({freq: 520, dur: 0.08, type:"triangle", gain:0.06, sweep: 240});
+    btnSound.textContent = "SOUND OK";
+    setTimeout(()=>btnSound.textContent="SOUND ON", 1200);
+    canvas.focus();
+  });
 
   // =========================
   // State
@@ -196,9 +219,7 @@
   const bullets = [];
   const enemyBullets = [];
   const barriers = [];
-
-  // 爆発パーティクル
-  const sparks = []; // {x,y,vx,vy,r,t,life,color}
+  const sparks = [];
 
   let invaders = [];
   let invDir = 1;
@@ -207,14 +228,13 @@
   let stepTimer = 0;
   let stepInterval = 0.55;
 
-  // キー入力
   const keys = new Set();
 
-  window.addEventListener("keydown", (e) => {
-    // ★ iPad Safari対策：Spaceは code優先で拾う
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+  window.addEventListener("keydown", async (e) => {
     const isSpace = (e.code === "Space") || (e.key === " ") || (e.key === "Spacebar");
 
-    // ページスクロールなどを止める
     if (["ArrowLeft","ArrowRight","a","d","A","D","p","P","m","M"].includes(e.key) || isSpace) {
       e.preventDefault();
     }
@@ -224,10 +244,8 @@
     if (e.key === "p" || e.key === "P") paused = !paused;
     if (e.key === "m" || e.key === "M") Audio.setEnabled(!Audio.enabled);
 
-    // 音アンロック（初回操作）
-    Audio.unlock();
-
-    // ★ フォーカスをcanvasへ寄せる（Spaceがボタンに吸われるの防止）
+    // ★ iPad Safari：キーボード操作でも一応unlock試す（通らない時もある）
+    await Audio.unlock();
     canvas.focus();
 
     if (isSpace && !paused) shoot();
@@ -235,19 +253,22 @@
 
   window.addEventListener("keyup", (e) => keys.delete(e.key));
 
-  // タッチ/マウス
   function pointerToCanvasX(clientX){
     const rect = canvas.getBoundingClientRect();
     return (clientX - rect.left) * (canvas.width / rect.width);
   }
 
-  canvas.addEventListener("pointerdown", (e) => {
-    canvas.setPointerCapture(e.pointerId);
+  // ★ iOSは「touchstart」が最強のgestureなので必ずここでunlock
+  canvas.addEventListener("touchstart", async () => {
+    canvas.focus();
+    await Audio.unlock();
+  }, { passive:true });
 
-    // ★ これが効く：iPad Safariでキーボード入力を受ける
+  canvas.addEventListener("pointerdown", async (e) => {
+    canvas.setPointerCapture(e.pointerId);
     canvas.focus();
 
-    Audio.unlock();
+    await Audio.unlock();
 
     player.targetX = pointerToCanvasX(e.clientX) - player.w/2;
     if (!paused) shoot();
@@ -260,14 +281,17 @@
 
   canvas.addEventListener("pointerup", () => player.targetX = null);
 
-  btnRestart.addEventListener("click", () => {
-    // ★ 押した後にSpaceがボタンへ吸われないよう、canvasへ戻す
+  btnRestart.addEventListener("click", async () => {
     reset(true);
     canvas.focus();
-    Audio.unlock();
+    await Audio.unlock();
   });
 
-  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+  function syncHUD(){
+    $score.textContent = String(score);
+    $lives.textContent = String(lives);
+    $wave.textContent  = String(wave);
+  }
 
   function reset(full){
     if (full){
@@ -295,27 +319,17 @@
     syncHUD();
   }
 
-  function syncHUD(){
-    $score.textContent = String(score);
-    $lives.textContent = String(lives);
-    $wave.textContent  = String(wave);
-  }
-
   function makeInvaders(){
     invaders = [];
-    const rows = 5;
-    const cols = 11;
-    const padX = 42;
-    const top = 70;
-    const gap = 10;
+    const rows = 5, cols = 11;
+    const padX = 42, top = 70, gap = 10;
     const iw = 38, ih = 26;
 
     for (let r=0; r<rows; r++){
       for (let c=0; c<cols; c++){
         const x = padX + c*(iw+gap);
         const y = top + r*(ih+gap);
-        const type = r; // 上ほど高得点
-        invaders.push({ x,y,w:iw,h:ih, alive:true, type, phase: Math.random()*Math.PI*2 });
+        invaders.push({ x,y,w:iw,h:ih, alive:true, type:r, phase: Math.random()*Math.PI*2 });
       }
     }
   }
@@ -355,13 +369,9 @@
     if (player.cooldown > 0) return;
     if (bullets.length >= 3) return;
 
-    bullets.push({
-      x: player.x + player.w/2,
-      y: player.y - 6,
-      r: 3.5,
-      vy: -8.5
-    });
+    bullets.push({ x: player.x + player.w/2, y: player.y - 6, r: 3.5, vy: -8.5 });
     player.cooldown = 10;
+
     Audio.shoot();
   }
 
@@ -370,6 +380,11 @@
     const ny = clamp(cy, ry, ry+rh);
     const dx = cx - nx, dy = cy - ny;
     return (dx*dx + dy*dy) <= r*r;
+  }
+
+  function invaderColor(type){
+    return ["rgba(255,230,150,.95)","rgba(200,255,190,.95)","rgba(170,210,255,.95)","rgba(255,175,205,.95)","rgba(210,190,255,.95)"][type]
+      || "rgba(200,230,255,.95)";
   }
 
   function explode(x,y,baseColor){
@@ -389,11 +404,6 @@
     }
   }
 
-  function invaderColor(type){
-    return ["rgba(255,230,150,.95)","rgba(200,255,190,.95)","rgba(170,210,255,.95)","rgba(255,175,205,.95)","rgba(210,190,255,.95)"][type]
-      || "rgba(200,230,255,.95)";
-  }
-
   function fireEnemyBullet(){
     const cols = new Map();
     for (const inv of invaders){
@@ -411,12 +421,7 @@
     );
     const pick = shooters[Math.random() < 0.65 ? 0 : Math.floor(Math.random()*shooters.length)];
 
-    enemyBullets.push({
-      x: pick.x + pick.w/2,
-      y: pick.y + pick.h + 4,
-      r: 4,
-      vy: 6.2 + (wave-1)*0.25
-    });
+    enemyBullets.push({ x: pick.x + pick.w/2, y: pick.y + pick.h + 4, r: 4, vy: 6.2 + (wave-1)*0.25 });
   }
 
   function drawAlien(x, y, w, h, type, phase){
@@ -455,7 +460,6 @@
   function update(dt){
     if (paused) return;
 
-    // player move
     let dir = 0;
     if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) dir -= 1;
     if (keys.has("ArrowRight")|| keys.has("d") || keys.has("D")) dir += 1;
@@ -466,10 +470,8 @@
       player.x += dir * player.speed * dt * 60;
     }
     player.x = clamp(player.x, 10, W - player.w - 10);
-
     player.cooldown = Math.max(0, player.cooldown - dt*60);
 
-    // invader stepping
     stepTimer += dt;
     if (stepTimer >= stepInterval){
       stepTimer = 0;
@@ -491,7 +493,6 @@
         sparks.length = 0;
         makeBarriers();
         makeInvaders();
-
         invDir = 1;
         invSpeed = 0.55 + (wave - 1) * 0.08;
         stepInterval = Math.max(0.20, 0.55 - (wave - 1) * 0.04);
@@ -504,41 +505,27 @@
 
       if (nextMin <= 14 || nextMax >= W - 14){
         invDir *= -1;
-        for (const inv of invaders){
-          if (inv.alive) inv.y += invDrop;
-        }
+        for (const inv of invaders){ if (inv.alive) inv.y += invDrop; }
         invSpeed = Math.min(1.8, invSpeed + 0.06);
       } else {
         for (const inv of invaders){
-          if (inv.alive) {
-            inv.x += invDir * invSpeed * 28;
-            inv.phase += 0.6;
-          }
+          if (inv.alive) { inv.x += invDir * invSpeed * 28; inv.phase += 0.6; }
         }
       }
 
-      // 「ﾄﾞﾝ…」っぽい移動音を薄く（好みでコメントアウト可）
       Audio.step();
 
-      // enemy fire
       const fireChance = clamp(0.08 + (1 - aliveCount/55) * 0.28 + (wave-1)*0.02, 0.08, 0.5);
-      if (Math.random() < fireChance){
-        fireEnemyBullet();
-      }
+      if (Math.random() < fireChance) fireEnemyBullet();
 
-      if (maxY >= player.y - 6){
-        gameOver = true;
-      }
+      if (maxY >= player.y - 6) gameOver = true;
     }
 
-    // player bullets
     for (let i=bullets.length-1; i>=0; i--){
       const b = bullets[i];
       b.y += b.vy * dt * 60;
-
       if (b.y < -20){ bullets.splice(i,1); continue; }
 
-      // barriers
       let hitBarrier = false;
       for (let j=barriers.length-1; j>=0; j--){
         const bb = barriers[j];
@@ -552,7 +539,6 @@
       }
       if (hitBarrier) continue;
 
-      // invaders
       for (const inv of invaders){
         if (!inv.alive) continue;
         if (circleRect(b.x, b.y, b.r, inv.x, inv.y, inv.w, inv.h)){
@@ -572,14 +558,11 @@
       }
     }
 
-    // enemy bullets
     for (let i=enemyBullets.length-1; i>=0; i--){
       const b = enemyBullets[i];
       b.y += b.vy * dt * 60;
-
       if (b.y > H + 30){ enemyBullets.splice(i,1); continue; }
 
-      // barriers
       let hitBarrier = false;
       for (let j=barriers.length-1; j>=0; j--){
         const bb = barriers[j];
@@ -593,22 +576,16 @@
       }
       if (hitBarrier) continue;
 
-      // player
       if (circleRect(b.x, b.y, b.r, player.x, player.y, player.w, player.h)){
         enemyBullets.splice(i,1);
         lives -= 1;
         syncHUD();
         Audio.hurt();
         explode(player.x + player.w/2, player.y + player.h/2, "rgba(255,120,140,.95)");
-
-        if (lives <= 0){
-          lives = 0;
-          gameOver = true;
-        }
+        if (lives <= 0){ lives = 0; gameOver = true; }
       }
     }
 
-    // sparks
     for (let i=sparks.length-1; i>=0; i--){
       const p = sparks[i];
       p.t += dt;
@@ -621,7 +598,7 @@
     }
   }
 
-  function roundRect(x,y,w,h,r,fill=false,stroke=false){
+  function roundRect(x,y,w,h,r,fill=false){
     const rr = Math.min(r, w/2, h/2);
     ctx.beginPath();
     ctx.moveTo(x+rr,y);
@@ -631,12 +608,11 @@
     ctx.arcTo(x,y, x+w,y, rr);
     ctx.closePath();
     if (fill) ctx.fill();
-    if (stroke) ctx.stroke();
   }
 
   function centerText(text,y,size,color){
     ctx.fillStyle = color;
-    ctx.font = `800 ${size}px system-ui, -apple-system, "Segoe UI", "Noto Sans JP", sans-serif`;
+    ctx.font = `900 ${size}px system-ui, -apple-system, "Noto Sans JP", sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(text, W/2, y);
@@ -645,7 +621,6 @@
   function draw(){
     ctx.clearRect(0,0,W,H);
 
-    // stars
     ctx.globalAlpha = 0.22;
     for (let i=0;i<90;i++){
       const x = (i*97) % W;
@@ -655,24 +630,20 @@
     }
     ctx.globalAlpha = 1;
 
-    // barriers
     for (const b of barriers){
       const a = b.hp === 3 ? 0.95 : (b.hp === 2 ? 0.72 : 0.48);
       ctx.fillStyle = `rgba(160,255,200,${a})`;
       ctx.fillRect(b.x, b.y, b.w, b.h);
     }
 
-    // player
     ctx.fillStyle = "rgba(240,246,255,.95)";
     roundRect(player.x, player.y, player.w, player.h, 8, true);
 
-    // invaders
     for (const inv of invaders){
       if (!inv.alive) continue;
       drawAlien(inv.x, inv.y, inv.w, inv.h, inv.type, inv.phase);
     }
 
-    // bullets
     for (const b of bullets){
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
@@ -680,7 +651,6 @@
       ctx.fill();
     }
 
-    // enemy bullets
     for (const b of enemyBullets){
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
@@ -688,7 +658,6 @@
       ctx.fill();
     }
 
-    // sparks
     for (const p of sparks){
       const a = 1 - (p.t / p.life);
       ctx.beginPath();
@@ -706,7 +675,6 @@
     }
   }
 
-  // loop
   let last = performance.now();
   function loop(now){
     const dt = Math.min(0.033, (now-last)/1000);
@@ -717,10 +685,7 @@
   }
 
   reset(true);
-
-  // ★ 初期フォーカス（効く環境だけ効く）
   try{ canvas.focus(); }catch{}
-
   requestAnimationFrame(loop);
 })();
 </script>
